@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -62,6 +63,37 @@ class RunnerTests(unittest.TestCase):
     self.assertEqual(m.resolve_cli('codex'),(str(Path(tmp)/'default-cli'),'default'))
     config.write_text(json.dumps({'cli':{'codex':str(cli)}}))
     self.assertEqual(m.resolve_cli('codex'),(str(cli),'config'))
+ def test_resolve_cli_non_darwin_uses_which_and_path_source(self):
+  env={'PATH':'/synthetic/bin','AGENT_ORCH_HOME':str(self.config_home)}
+  with patch.object(m.sys,'platform','linux'),patch.object(m.shutil,'which',return_value='/opt/tool/cli') as which:
+   for provider,name in [('deepseek','dsh'),('codex','codex'),('claude','claude')]:
+    self.assertEqual(m.resolve_cli(provider,env=env),('/opt/tool/cli','path'))
+    which.assert_called_with(name,path='/synthetic/bin')
+  with patch.object(m.sys,'platform','linux'),patch.object(m.shutil,'which',return_value=None):
+   self.assertEqual(m.resolve_cli('deepseek',env=env),('dsh','path'))
+   self.assertEqual(m.resolve_cli('codex',env=env),('codex','path'))
+   self.assertEqual(m.resolve_cli('claude',env=env),(str(Path(m.CLAUDE).expanduser()),'path'))
+ def test_popen_group_kwargs_uses_process_group_per_platform(self):
+  with patch.object(m.os,'name','nt'),patch.object(subprocess,'CREATE_NEW_PROCESS_GROUP',512,create=True):
+   self.assertEqual(m.popen_group_kwargs(),{'creationflags':512})
+  with patch.object(m.os,'name','posix'):
+   self.assertEqual(m.popen_group_kwargs(),{'start_new_session':True})
+ def test_stop_group_windows_uses_taskkill_and_kills_survivor(self):
+  class FakeProc:
+   pid=4321
+   def __init__(self):
+    self.killed=0; self.waited=0
+   def poll(self):
+    return None
+   def kill(self):
+    self.killed+=1
+   def wait(self):
+    self.waited+=1; return 0
+  proc=FakeProc()
+  with patch.object(m.os,'name','nt'),patch.object(m.subprocess,'run') as run:
+   m.stop_group(proc)
+  run.assert_called_once_with(['taskkill','/T','/F','/PID','4321'],capture_output=True,check=False,timeout=15)
+  self.assertEqual(proc.killed,1); self.assertEqual(proc.waited,1)
  def test_codex_requires_completed_turn_and_final_message(self):
   events=[{'type':'thread.started','thread_id':'offline-thread'},
           {'type':'item.completed','item':{'type':'agent_message','text':'{"ok":true}'}},
@@ -154,6 +186,17 @@ class RunnerTests(unittest.TestCase):
    root=Path(tmp).resolve(); cli,task=self._fake(root,self.CODEX_OK)
    with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
     self._run(['codex','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs'),'--cli',str(cli),'--resume','t1','--ephemeral'])
+ def test_windows_batch_shim_is_rejected(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp).resolve(); shim=root/'fake.cmd'; shim.write_text('@echo off\n')
+   task=root/'task.txt'; task.write_text('offline check')
+   stderr=io.StringIO()
+   with patch.dict(os.environ,{'AGENT_ORCH_CODEX_CLI':str(shim)}), \
+     self.assertRaises(SystemExit) as caught, contextlib.redirect_stderr(stderr):
+    self._run(['codex','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs')])
+   self.assertNotEqual(caught.exception.code,0)
+   self.assertIn('cmd.exe',stderr.getvalue()); self.assertIn('.exe',stderr.getvalue())
+   self.assertFalse((root/'runs').exists())
  def test_idle_timeout_stops_silent_worker(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp).resolve(); cli,task=self._fake(root,'import time\nprint("x",flush=True)\ntime.sleep(30)\n')
@@ -207,6 +250,26 @@ class RunnerTests(unittest.TestCase):
    self.assertEqual(env['DEEPSEEK_API_KEY'],'stored-test-key')
    self.assertTrue(reader.call_args.kwargs['capture_output'])
    self.assertNotIn('stored-test-key',str(reader.call_args.args))
+
+ def test_deepseek_credentials_python_fallback(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp)
+   credentials=root/'.credentials.yaml'
+   credentials.write_text('# managed file\nversion: 1\nrefs:\n  # only this key is bridged\n  DEEPSEEK_API_KEY: "fallback-test-key"\n  OTHER_KEY: value\n')
+   env={'DSH_HOME':str(root)}
+   with patch.object(m.shutil,'which',return_value=None):
+    self.assertEqual(m.deepseek_credential_source(env),'dsh-credentials-file')
+   self.assertEqual(env['DEEPSEEK_API_KEY'],'fallback-test-key')
+   credentials.write_text("refs:\n  DEEPSEEK_API_KEY: 'single-quoted-key'\n")
+   single={'DSH_HOME':str(root)}
+   with patch.object(m.shutil,'which',return_value=None):
+    self.assertEqual(m.deepseek_credential_source(single),'dsh-credentials-file')
+   self.assertEqual(single['DEEPSEEK_API_KEY'],'single-quoted-key')
+   credentials.write_text('refs:\n  OTHER_KEY: value\n')
+   missing={'DSH_HOME':str(root)}
+   with patch.object(m.shutil,'which',return_value=None):
+    self.assertIsNone(m.deepseek_credential_source(missing))
+   self.assertNotIn('DEEPSEEK_API_KEY',missing)
 
  CLAUDE_OK=('import json,os,sys\nfrom pathlib import Path\n'
   'Path("seen-args.json").write_text(json.dumps(sys.argv[1:]))\n'

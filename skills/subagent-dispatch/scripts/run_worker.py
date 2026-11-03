@@ -28,7 +28,7 @@ DEFAULT_IDLE_TIMEOUT = {'codex': 900, 'deepseek': 300, 'claude': 300}
 
 
 def save(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
 def resolve_cli(provider, explicit=None, env=os.environ):
@@ -44,7 +44,7 @@ def resolve_cli(provider, explicit=None, env=os.environ):
     config_home = Path(env.get('AGENT_ORCH_HOME')
                        or str(Path.home() / '.config/agent-orchestration')).expanduser()
     try:
-        config = json.loads((config_home / 'config.json').read_text())
+        config = json.loads((config_home / 'config.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         config = None
     if isinstance(config, dict) and isinstance(config.get('cli'), dict):
@@ -52,12 +52,21 @@ def resolve_cli(provider, explicit=None, env=os.environ):
         if isinstance(configured, str) and configured:
             return str(Path(configured).expanduser()), 'config'
     if key == 'deepseek':
-        return str(Path(DSH_DESKTOP_CLI).expanduser()), 'desktop-managed-cli'
+        if sys.platform == 'darwin':
+            return str(Path(DSH_DESKTOP_CLI).expanduser()), 'desktop-managed-cli'
+        return str(Path(shutil.which('dsh', path=env.get('PATH')) or 'dsh').expanduser()), 'path'
     if key == 'codex':
-        return str(Path(CODEX).expanduser()), 'default'
+        if sys.platform == 'darwin':
+            return str(Path(CODEX).expanduser()), 'default'
+        return str(Path(shutil.which('codex', path=env.get('PATH')) or 'codex').expanduser()), 'path'
     if key == 'claude':
         discovered = shutil.which('claude', path=env.get('PATH'))
-        return str(Path(discovered or CLAUDE).expanduser()), 'default'
+        if sys.platform == 'darwin':
+            return str(Path(discovered or CLAUDE).expanduser()), 'default'
+        fallback = CLAUDE
+        if sys.platform == 'win32' or os.name == 'nt':
+            fallback = str(Path(CLAUDE).with_suffix('.exe'))
+        return str(Path(discovered or fallback).expanduser()), 'path'
     raise ValueError('Unknown CLI provider: ' + str(provider))
 
 
@@ -82,29 +91,60 @@ def claude_destination(env):
     return endpoint.hostname
 
 
+def read_deepseek_key_from_credentials(credentials_path):
+    """Read refs.DEEPSEEK_API_KEY from the simple credentials YAML without a parser dependency."""
+    try:
+        lines = credentials_path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return None
+    in_refs = False
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        if not raw_line[:1].isspace():
+            in_refs = stripped == 'refs:'
+            continue
+        if not in_refs:
+            continue
+        name, separator, value = stripped.partition(':')
+        if not separator or name.strip() != 'DEEPSEEK_API_KEY':
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        return value or None
+    return None
+
+
 def deepseek_credential_source(env):
     if env.get('DEEPSEEK_API_KEY'):
         return 'launch-environment'
     dsh_home = Path(env.get('DSH_HOME') or str(Path.home() / '.dsh')).expanduser()
     credentials_path = dsh_home / '.credentials.yaml'
+    if not credentials_path.is_file():
+        return None
     ruby = shutil.which('ruby', path=env.get('PATH'))
-    if not credentials_path.is_file() or not ruby:
-        return None
-    # The shipped headless profile omits the credentials service, so bridge only this key.
-    reader = (
-        "require 'yaml'; "
-        "data = YAML.safe_load(File.read(ARGV.fetch(0))); "
-        "refs = data.is_a?(Hash) ? data['refs'] : nil; "
-        "key = refs.is_a?(Hash) ? refs['DEEPSEEK_API_KEY'] : nil; "
-        "STDOUT.write(key) if key.is_a?(String)"
-    )
-    try:
-        result = subprocess.run([ruby, '-e', reader, str(credentials_path)],
-                                capture_output=True, text=True, check=False, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    key = result.stdout.strip()
-    if result.returncode != 0 or not key:
+    if ruby:
+        # The shipped headless profile omits the credentials service, so bridge only this key.
+        reader = (
+            "require 'yaml'; "
+            "data = YAML.safe_load(File.read(ARGV.fetch(0))); "
+            "refs = data.is_a?(Hash) ? data['refs'] : nil; "
+            "key = refs.is_a?(Hash) ? refs['DEEPSEEK_API_KEY'] : nil; "
+            "STDOUT.write(key) if key.is_a?(String)"
+        )
+        try:
+            result = subprocess.run([ruby, '-e', reader, str(credentials_path)],
+                                    capture_output=True, text=True, check=False, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            result = None
+        key = result.stdout.strip() if result is not None else ''
+        if result is not None and result.returncode == 0 and key:
+            env['DEEPSEEK_API_KEY'] = key
+            return 'dsh-credentials-file'
+    key = read_deepseek_key_from_credentials(credentials_path)
+    if not key:
         return None
     env['DEEPSEEK_API_KEY'] = key
     return 'dsh-credentials-file'
@@ -212,7 +252,24 @@ def parse_result(provider, raw):
     }
 
 
+def popen_group_kwargs():
+    """Return the Popen arguments that put the CLI in its own killable process group."""
+    if os.name == 'nt':
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {'start_new_session': True}
+
+
 def stop_group(proc):
+    if os.name == 'nt':
+        try:
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)],
+                           capture_output=True, check=False, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        return
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -311,7 +368,7 @@ def main():
     cwd = a.cwd.expanduser().resolve(strict=True)
     if not cwd.is_dir():
         p.error('--cwd must be a directory')
-    task = a.task_file.expanduser().resolve(strict=True).read_text()
+    task = a.task_file.expanduser().resolve(strict=True).read_text(encoding='utf-8')
     if not task.strip():
         p.error('Task must not be empty')
     env = os.environ.copy()
@@ -327,7 +384,7 @@ def main():
         config_dir = Path(env.get('CLAUDE_CONFIG_DIR', str(Path.home() / '.claude'))).expanduser()
         settings_path = config_dir / 'settings.json'
         if settings_path.is_file():
-            configured_env = json.loads(settings_path.read_text()).get('env', {})
+            configured_env = json.loads(settings_path.read_text(encoding='utf-8')).get('env', {})
             for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'):
                 if isinstance(configured_env.get(key), str):
                     env.setdefault(key, configured_env[key])
@@ -353,7 +410,7 @@ def main():
             cmd += ['--allowedTools', tool_list]
         cmd += ['--verbose']
         if a.schema:
-            schema = json.loads(a.schema.expanduser().resolve(strict=True).read_text())
+            schema = json.loads(a.schema.expanduser().resolve(strict=True).read_text(encoding='utf-8'))
             cmd += ['--json-schema', json.dumps(schema)]
         if a.resume:
             cmd += ['--resume', a.resume]
@@ -382,13 +439,20 @@ def main():
         if a.resume:
             cmd += [a.resume]
         cmd += ['--', task]
+    if Path(cmd[0]).suffix.lower() in ('.cmd', '.bat'):
+        p.error('Windows batch shims (.cmd/.bat) cannot receive multi-line task text: '
+                'cmd.exe truncates or rewrites it. Pass --cli, set ' + CLI_ENV[a.provider]
+                + ', or configure cli.' + a.provider + ' in config.json to point at the real .exe '
+                '(for example the codex.exe in the vendor directory under '
+                'node_modules\\@openai\\codex for npm installs, or claude.exe for a native '
+                'Claude Code install).')
     if not Path(cmd[0]).is_file():
         p.error('CLI missing: ' + cmd[0] + '; pass --cli, set ' + CLI_ENV[a.provider]
                 + ', or configure cli.' + a.provider + ' in config.json')
     name = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + a.provider + '-' + uuid.uuid4().hex[:8]
     run = a.runs_dir.expanduser().resolve() / name
     run.mkdir(parents=True, mode=0o700)
-    (run / 'task.txt').write_text(task)
+    (run / 'task.txt').write_text(task, encoding='utf-8')
     meta = {'provider': a.provider, 'cwd': str(cwd), 'timeout_seconds': a.timeout,
             'idle_timeout_seconds': a.idle_timeout, 'resume': a.resume, 'cli_path': cli_path,
             'cli_source': cli_source, 'command_without_task': cmd[:-1], 'run_dir': str(run)}
@@ -414,7 +478,7 @@ def main():
     with (run / 'stdout.log').open('w') as out, (run / 'stderr.log').open('w') as err:
         try:
             proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=out, stderr=err, start_new_session=True)
+                                    stdout=out, stderr=err, **popen_group_kwargs())
             meta['pid'] = proc.pid
             meta['process_group_id'] = proc.pid
             save(run / 'request.json', meta)
@@ -438,7 +502,7 @@ def main():
             meta['launch_error'] = str(exc)
     summary = {**meta, 'state': state, 'exit_code': rc, 'elapsed_seconds': round(time.monotonic() - start, 2)}
     try:
-        summary.update(parse_result(a.provider, (run / 'stdout.log').read_text()))
+        summary.update(parse_result(a.provider, (run / 'stdout.log').read_text(encoding='utf-8', errors='replace')))
     except (ValueError, TypeError, KeyError) as exc:
         summary['parse_error'] = str(exc)
     if a.provider == 'codex' and a.schema and isinstance(summary.get('result'), str):

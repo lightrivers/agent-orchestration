@@ -9,7 +9,7 @@
 [English](README.md) | 简体中文
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)
 ![Deps](https://img.shields.io/badge/deps-python3%20stdlib%20%2B%20bash-green.svg)
 ![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex-orange.svg)
 
@@ -58,22 +58,39 @@
 | 和人沟通的规矩（谁问、问什么、何时问） | ✅ | — | 部分 | — | — | — |
 | 真实基础设施操作的风险分级与审计 | ✅ L0–L3 + 审计脚本 | — | — | — | — | — |
 | 上下文换届流程 | ✅ | 记忆数据库 | — | — | — | — |
-| 安装负担 | `./install.sh`，只用标准库 | npm / MCP | 插件 | Python MCP 服务器 | Node / 桌面应用 | brew / npm，需要 tmux |
+| 安装负担 | `install.sh` / `install.ps1`，只用标准库 | npm / MCP | 插件 | Python MCP 服务器 | Node / 桌面应用 | brew / npm，需要 tmux |
 
 **适合用它的场景：** 你希望 Claude（或 Codex）在长期、复杂、真实的任务里（不只是写代码，也包括运维）一直当大脑，花得更少，又不牺牲验收。
 **更适合用别的：** 想要大规模自主蜂群（Ruflo）；想要严格的 TDD 编码流程（Superpowers，可以和本项目一起用）；只是想让 Claude Code 跑在别的模型上（claude-code-router）。
 
 ## 快速开始
 
+**macOS / Linux**
+
 ```bash
 git clone https://github.com/lightrivers/agent-orchestration.git ~/agent-orchestration
 cd ~/agent-orchestration && ./install.sh
 ```
 
+**Windows**（PowerShell 5.1 或 7，不需要管理员权限）
+
+```powershell
+git clone https://github.com/lightrivers/agent-orchestration.git $HOME\agent-orchestration
+cd $HOME\agent-orchestration
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+不想用命令行 git 的话，用 GitHub Desktop 克隆（File → Clone repository），再在该文件夹里运行最后一行。
+
 然后初始化一个项目。这一步会往它的 `CLAUDE.md` 加一小段约定，并建好带模板的 `work/`、`outputs/`：
 
 ```bash
 ~/agent-orchestration/install.sh --project-only ~/my-project
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File $HOME\agent-orchestration\install.ps1 -ProjectOnly $HOME\my-project
 ```
 
 在 Claude Code 里打开这个项目照常工作。任务合适时 skill 会自动触发，也可以用 `/subagent-dispatch`、`/session-orchestration` 直接调用。
@@ -90,6 +107,8 @@ cd ~/agent-orchestration && ./install.sh
 ./install.sh --check             跑离线测试，报告 skill 和 CLI 状态（不改任何东西）
 ./uninstall.sh [--purge]         删除链接或复制目录；--purge 连配置目录一起删
 ```
+
+Windows 上对应的选项是 `install.ps1` 的 `-Codex`、`-Copy`、`-Project DIR`、`-ProjectOnly DIR`、`-Check`、`-Help`，以及 `uninstall.ps1` 的 `-Purge`。skill 以目录联接（junction）安装，不需要管理员权限，也不用开开发者模式。
 
 环境变量 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`AGENT_ORCH_HOME` 可以改默认位置。
 
@@ -134,8 +153,9 @@ CLI 查找顺序：`--cli` → `AGENT_ORCH_{DEEPSEEK,CODEX,CLAUDE}_CLI` → `con
 
 ## 依赖
 
-- 必需：`python3` ≥ 3.9、`bash`、`git`。
+- 必需：Python ≥ 3.9、git。macOS/Linux 还需要 `bash`；Windows 需要 PowerShell 5.1+，以及从 [python.org](https://www.python.org/downloads/windows/) 安装的 Python（微软商店的空壳会被跳过）。文档里写 `python3` 的地方，Windows 上换成 `python` 或 `py -3`。
 - 按需（每个子代理一项）：[DeepSeek Harness Desktop](https://www.deepseek.com/)（默认执行者；设置 `DEEPSEEK_API_KEY` 或在应用里保存密钥）、[Claude Code](https://claude.com/claude-code) CLI（评审）、Codex CLI（评审或备用执行）。没装的子代理只是不能调用。
+- Windows：runner 要指向真正的 `.exe`，不能指向 npm 生成的 `.cmd` 垫片。`cmd.exe` 会截断多行任务文本，所以 runner 会拒绝垫片。DeepSeek 的密钥最省事的给法是设置 `DEEPSEEK_API_KEY` 环境变量。
 - 子会话相关工具（`start_session`、`SendMessage`、`detach_session` 等）属于 **Claude Desktop** 的 Code 页。在 CLI 里改用另开终端会话、回报写文件。
 
 ## 常见问题
@@ -150,7 +170,10 @@ CLI 查找顺序：`--cli` → `AGENT_ORCH_{DEEPSEEK,CODEX,CLAUDE}_CLI` → `con
 只在 `authorizations.md` 授权的范围内。新模型、新供应商或可能明显产生费用的调用都要先问你。runner 从不自动重跑或自动换模型。
 
 **怎么更新？**
-`git pull`。链接安装立即生效；复制安装要再跑一次 `./install.sh --copy`。
+`git pull`（或在 GitHub Desktop 里点 Fetch/Pull）。链接安装立即生效；复制安装要带 `--copy` / `-Copy` 再跑一次安装脚本。
+
+**支持 Windows 吗？**
+支持。用 `install.ps1` 安装；runner 在 Windows 上用 `taskkill` 终止进程树。Windows 分支有模拟 Windows 的测试覆盖，PowerShell 安装脚本用 PowerShell 7 测过。在真实 Windows 机器上遇到问题欢迎提 issue。
 
 ## 目录结构
 
@@ -159,7 +182,7 @@ skills/
   subagent-dispatch/      SKILL.md · reference/ · templates/task-brief.md · scripts/ · tests/
   session-orchestration/  SKILL.md · handover.md · sub-session.md · organizer-brief.md
 templates/                配置、授权、CLAUDE.md 片段、项目文件模板
-install.sh · uninstall.sh · tests/test_install.sh
+install.sh · uninstall.sh · install.ps1 · uninstall.ps1 · tests/test_install.{sh,ps1}
 ```
 
 ## 参与贡献
@@ -168,6 +191,7 @@ install.sh · uninstall.sh · tests/test_install.sh
 
 ```bash
 ./install.sh --check && bash tests/test_install.sh
+pwsh -NoProfile -File tests/test_install.ps1   # 有 PowerShell 时
 ```
 
 ## 许可证

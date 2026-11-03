@@ -87,7 +87,13 @@ python3 -B $R <worker> ... --schema work/tasks/X.schema.json # 结构化输出�
 python3 -B $R <worker> ... --cli /path/to/cli               # 临时指定 CLI
 ```
 
-CLI 路径的查找顺序：`--cli` → 环境变量 `AGENT_ORCH_DEEPSEEK_CLI` / `AGENT_ORCH_CODEX_CLI` / `AGENT_ORCH_CLAUDE_CLI` → `config.json` 的 `cli.<worker>` → 内置默认（macOS 应用包内路径；Claude 取 PATH 上的 `claude`）。实际用的路径和来源记在 `request.json` 的 `cli_path` / `cli_source`。
+CLI 路径的查找顺序：`--cli` → 环境变量 `AGENT_ORCH_DEEPSEEK_CLI` / `AGENT_ORCH_CODEX_CLI` / `AGENT_ORCH_CLAUDE_CLI` → `config.json` 的 `cli.<worker>` → 内置默认（macOS 用应用包内路径，Claude 取 PATH 上的 `claude`；其他系统一律从 PATH 找）。实际用的路径和来源记在 `request.json` 的 `cli_path` / `cli_source`。
+
+Windows 上：
+- 文中的 `python3` 换成 `python` 或 `py -3`，路径分隔符用 `\`；Bash 工具里用 Git Bash 时照原样即可。
+- CLI 要指向真正的 `.exe`。npm 装的 `codex.cmd` 这类 `.cmd` / `.bat` 垫片会被 runner 拒绝，因为 `cmd.exe` 会截断多行任务文本。
+- DeepSeek 密钥最省事的给法是设置用户环境变量 `DEEPSEEK_API_KEY`。
+- 超时后 runner 用 `taskkill /T /F` 结束整个进程树。
 
 监督改动真实环境的子代理时，用 `$SKILL/scripts/check_progress.py <任务目录>` 扫它写的 `progress.md` / `changes.md`（退出码 2 = 有 HIGH 报警，1 = 只有 MEDIUM）。受保护路径来自 `config.json` 的 `protected_paths` 和 `--protected-path`。
 
@@ -120,4 +126,4 @@ CLI 路径的查找顺序：`--cli` → 环境变量 `AGENT_ORCH_DEEPSEEK_CLI` /
 - 授权记录在 `$AGENT_ORCH_HOME/authorizations.md`。读到有效记录就直接调用，不再重复询问；用户新给的授权要写进去。
 - 记录没有覆盖的调用（新模型、新供应商、可能产生明显费用的调用），先说明 Agent、模型、范围和原因，征得同意后再调用。
 - `requested_model` 只能证明请求了什么，不能证明服务端实际用了哪个模型或如何计费。
-- 修改 runner 或本指南后，运行 `python3 -B $SKILL/tests/test_worker.py` 和 `bash $SKILL/tests/check_progress_test/run_tests.sh`（离线，不调用模型）。改动规则本身应提交到 skill 所在的 git 仓库，本机专属内容只写进配置目录。
+- 修改 runner 或本指南后，运行 `python3 -B $SKILL/tests/test_worker.py` 和 `python3 -B $SKILL/tests/test_check_progress.py`（离线，不调用模型）。改动规则本身应提交到 skill 所在的 git 仓库，本机专属内容只写进配置目录。

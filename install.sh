@@ -373,7 +373,7 @@ perform_check() {
 
     printf '== 离线测试 ==\n'
     worker_test="$REPO_ROOT/skills/subagent-dispatch/tests/test_worker.py"
-    progress_test="$REPO_ROOT/skills/subagent-dispatch/tests/check_progress_test/run_tests.sh"
+    progress_test="$REPO_ROOT/skills/subagent-dispatch/tests/test_check_progress.py"
 
     if [ -f "$worker_test" ]; then
         if python3 -B "$worker_test"; then
@@ -388,10 +388,10 @@ perform_check() {
     fi
 
     if [ -f "$progress_test" ]; then
-        if PYTHONDONTWRITEBYTECODE=1 bash "$progress_test"; then
-            printf '测试通过: check_progress_test/run_tests.sh\n'
+        if python3 -B "$progress_test"; then
+            printf '测试通过: test_check_progress.py\n'
         else
-            printf '测试失败: check_progress_test/run_tests.sh\n' >&2
+            printf '测试失败: test_check_progress.py\n' >&2
             check_status=1
         fi
     else

@@ -925,6 +925,11 @@ def _load_protected_paths(config_path: str) -> List[str]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(errors="replace")
+
     parser = argparse.ArgumentParser(
         description="检查 DeepSeek 任务目录中的 progress.md 和 changes.md"
     )

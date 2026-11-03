@@ -9,7 +9,7 @@ A set of Claude Code skills that turn one Claude session into a *lead*. The lead
 English | [简体中文](README.zh-CN.md)
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)
 ![Deps](https://img.shields.io/badge/deps-python3%20stdlib%20%2B%20bash-green.svg)
 ![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex-orange.svg)
 
@@ -58,22 +58,39 @@ These projects solve neighbouring problems, and several of them combine well wit
 | Protocol for talking to the human (who asks what, when) | ✅ | — | partly | — | — | — |
 | Risk levels and audit for real-infrastructure ops | ✅ L0–L3 + auditor | — | — | — | — | — |
 | Context-handover procedure | ✅ | memory DB | — | — | — | — |
-| Install weight | `./install.sh`, stdlib only | npm / MCP | plugin | Python MCP server | Node / desktop app | brew / npm, tmux |
+| Install weight | `install.sh` / `install.ps1`, stdlib only | npm / MCP | plugin | Python MCP server | Node / desktop app | brew / npm, tmux |
 
 **Choose agent-orchestration when** you want Claude (or Codex) to stay the brain on long, messy, real-world tasks, including ops work and not only coding, and to spend less without giving up verification.
 **Choose something else when** you want a big autonomous swarm (Ruflo), a strict TDD coding workflow (Superpowers, which works alongside this), or simply to run Claude Code on another provider (claude-code-router).
 
 ## Quick start
 
+**macOS / Linux**
+
 ```bash
 git clone https://github.com/lightrivers/agent-orchestration.git ~/agent-orchestration
 cd ~/agent-orchestration && ./install.sh
 ```
 
+**Windows** (PowerShell 5.1 or 7; no admin rights needed)
+
+```powershell
+git clone https://github.com/lightrivers/agent-orchestration.git $HOME\agent-orchestration
+cd $HOME\agent-orchestration
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+No git on the command line? Clone it with GitHub Desktop (File → Clone repository), then run the last line inside that folder.
+
 Then set up a project, which adds a short section to its `CLAUDE.md` and creates `work/` and `outputs/` with templates:
 
 ```bash
 ~/agent-orchestration/install.sh --project-only ~/my-project
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File $HOME\agent-orchestration\install.ps1 -ProjectOnly $HOME\my-project
 ```
 
 Open the project in Claude Code and work as usual. The skills trigger on their own when a task fits, or you can call them directly with `/subagent-dispatch` and `/session-orchestration`.
@@ -90,6 +107,8 @@ Open the project in Claude Code and work as usual. The skills trigger on their o
 ./install.sh --check             run offline tests, report skill and CLI status (changes nothing)
 ./uninstall.sh [--purge]         remove links/copies; --purge also deletes the config dir
 ```
+
+On Windows the same options are `-Codex`, `-Copy`, `-Project DIR`, `-ProjectOnly DIR`, `-Check` and `-Help` on `install.ps1`, and `-Purge` on `uninstall.ps1`. Skills are installed as directory junctions, which need neither admin rights nor Developer Mode.
 
 Override locations with `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `AGENT_ORCH_HOME`.
 
@@ -134,8 +153,9 @@ CLI lookup order: `--cli` → `AGENT_ORCH_{DEEPSEEK,CODEX,CLAUDE}_CLI` → `conf
 
 ## Requirements
 
-- Required: `python3` ≥ 3.9, `bash`, `git`.
+- Required: Python ≥ 3.9 and git. On macOS/Linux also `bash`; on Windows, PowerShell 5.1+ and Python from [python.org](https://www.python.org/downloads/windows/) (the Microsoft Store stub is skipped). Use `python` or `py -3` wherever the docs say `python3`.
 - Optional, one per worker: [DeepSeek Harness Desktop](https://www.deepseek.com/) (default worker; set `DEEPSEEK_API_KEY` or save the key in the app), [Claude Code](https://claude.com/claude-code) CLI (reviewer) and Codex CLI (reviewer or fallback worker). Workers you don't have are simply unavailable.
+- Windows: point the runner at real `.exe` files, not npm `.cmd` shims. `cmd.exe` would truncate multi-line task text, so the runner refuses shims. Setting `DEEPSEEK_API_KEY` is the simplest way to give the DeepSeek worker its key.
 - The sub-session tools (`start_session`, `SendMessage`, `detach_session` …) belong to the **Claude Desktop** Code tab. In the CLI, use separate terminal sessions and file-based reports instead.
 
 ## FAQ
@@ -150,7 +170,10 @@ No. It is the default worker because it is fast and cheap. You can point the run
 Only within `authorizations.md`. New models, providers or anything that may cost noticeably require your approval first. The runner never retries or falls back automatically.
 
 **How do I update?**
-Run `git pull`. Symlinked installs update immediately. For copied installs, run `./install.sh --copy` again.
+Run `git pull` (or Fetch/Pull in GitHub Desktop). Linked installs update immediately. For copied installs, run the installer with `--copy` / `-Copy` again.
+
+**Does it work on Windows?**
+Yes. `install.ps1` handles installation, and the runner uses `taskkill` to stop process trees on Windows. The Windows code paths are covered by tests that simulate Windows, and the PowerShell installer is tested with PowerShell 7. If something breaks on a real Windows machine, please open an issue.
 
 ## Project layout
 
@@ -159,7 +182,7 @@ skills/
   subagent-dispatch/      SKILL.md · reference/ · templates/task-brief.md · scripts/ · tests/
   session-orchestration/  SKILL.md · handover.md · sub-session.md · organizer-brief.md
 templates/                config, authorizations, CLAUDE.md snippet, project files
-install.sh · uninstall.sh · tests/test_install.sh
+install.sh · uninstall.sh · install.ps1 · uninstall.ps1 · tests/test_install.{sh,ps1}
 ```
 
 ## Contributing
@@ -168,6 +191,7 @@ Issues and PRs are welcome. Before submitting, run:
 
 ```bash
 ./install.sh --check && bash tests/test_install.sh
+pwsh -NoProfile -File tests/test_install.ps1   # if PowerShell is available
 ```
 
 ## License
