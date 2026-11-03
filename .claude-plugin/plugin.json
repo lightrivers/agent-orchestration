@@ -1,0 +1,11 @@
+{
+  "name": "agent-orchestration",
+  "version": "0.1.0",
+  "description": "主会话/子会话分工与外部子代理（DeepSeek、Claude CLI、Codex）调用规则，含 runner 和检查脚本",
+  "license": "MIT",
+  "author": {
+    "name": "lightrivers"
+  },
+  "homepage": "https://github.com/lightrivers/agent-orchestration",
+  "repository": "https://github.com/lightrivers/agent-orchestration"
+}

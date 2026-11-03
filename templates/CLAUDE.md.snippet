@@ -1,0 +1,9 @@
+<!-- agent-orchestration:begin -->
+## 多代理分工（agent-orchestration）
+
+- 中间文件放 `work/`，交付物放 `outputs/`。
+- 涉及子代理选择、调用或管理时，使用 `subagent-dispatch` skill。低、中难度且边界清楚的任务（批量扫描、哈希比对、脚本编写、结果整理、文档改写等）默认交给 DeepSeek 子代理，主代理负责写任务书、审查结果并做决定；一两条命令就能完成的检查直接做。
+- 主会话（统筹、和用户沟通的会话）启动时使用 `session-orchestration` skill；子会话只按任务书的指示读文件。
+- 本项目的 L3 补充（在通用 L3 之外，只能由主会话在用户确认后执行的操作）：
+  - （无。按需列出，例如"`/data` 下任何写操作"）
+<!-- agent-orchestration:end -->

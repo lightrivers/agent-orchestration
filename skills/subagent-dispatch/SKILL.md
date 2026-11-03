@@ -1,0 +1,123 @@
+---
+name: subagent-dispatch
+description: 选择、调用、验收外部子代理（DeepSeek 默认执行者、Claude CLI / Codex 评审）。当任务是低、中难度且边界清楚的批量或脚本工作（多文件扫描、哈希比对、格式转换、写脚本、补测试、按模板生成文档、资料归纳），或需要对重要方案做跨模型独立评审，或要派 DeepSeek 模型的 Desktop 子会话时使用。
+---
+
+# 子代理调用指南
+
+本文中 `$SKILL` 指本 skill 所在目录（加载时显示的 Base directory；`install.sh` 默认装在 `~/.claude/skills/subagent-dispatch`）。本机专属的东西不在仓库里，在配置目录 `$AGENT_ORCH_HOME`（默认 `~/.config/agent-orchestration/`）：
+
+- `config.json`：三个 CLI 的路径、受保护路径列表。
+- `authorizations.md`：本机的授权记录、Desktop 子会话模型 ID、核实结论。
+
+Claude Code 或 Codex 作为主代理时都按本文件执行。
+
+## 分工
+
+- **主代理**：规划、拆分任务、写任务书、审核产物、做决定，对最终结果负责。
+- **DeepSeek**：默认执行者，批量处理边界清楚的低、中难度任务。
+- **评审**：重要方案在实施前交另一个模型独立评审。Claude 主代理找 Codex，Codex 主代理找 Claude CLI；也可以按需找同模型复核，但要在报告中标明。
+
+## 什么时候应该委派
+
+低、中难度、在授权范围内、主代理能快速验收（有测试、diff、清单或可抽查的输出）的任务，属于下面任一类时，默认交给 DeepSeek，不需要先问用户：
+
+- 批量、重复的工作：多文件扫描、哈希比对、格式转换、批量改写、结果整理。
+- 边界清楚的实现：写脚本、补测试、按明确规格改代码、按模板生成文档。
+- 读得多、想得少的工作：通读大量文件后按指定问题汇总，资料归纳。
+
+下面这些由主代理自己做：
+
+- 一两条命令就能完成的检查。
+- 需求还说不清楚、要先和用户确认的问题。
+- 每一步都依赖上一步结果、强耦合的改动，拆开反而更慢。
+- 需要把密钥、密码、2FA、cookie 写进任务书或日志的任务。（凭据应由脚本从钥匙串等处读取，不经过模型。）
+
+边界清楚但拿不准是否值得委派时，倾向于委派：写任务书的过程本身能帮主代理理清问题，DeepSeek 失败的代价通常只是几分钟和少量 token。会直接改动正式文件、难以回滚的任务，先让它改副本。
+
+## 任务书要求
+
+DeepSeek 响应快，但质量依赖任务边界和验收条件是否明确。派发前补齐以下信息；缺项无法从上下文推断时先澄清，不要写成"帮我看看""优化一下"这类许愿式指令。涉及改动真实环境（服务器、配置）的任务，套用 `$SKILL/templates/task-brief.md`（风险级别、变更记录、机械停点）。
+
+- **目标**：要实现或回答什么，完成后应看到什么结果。
+- **背景与证据**：相关文件、现状、已知约束和主代理已经确认的事实。
+- **范围**：允许改哪些文件、哪些内容不应改；读写、联网和命令权限分别写清楚。
+- **步骤与判断**：需要先检查什么，遇到歧义时如何处理；要求标出假设，不自行扩大范围。
+- **验收标准**：可执行的检查、预期结果和失败条件，不只写"质量好"或"没有问题"。
+- **交付格式**：改动文件、关键决定、测试结果、未完成项；需要机器处理时再要求 JSON。
+
+## 拆分与并行
+
+- 复杂任务拆成范围不重叠、能独立验收的子任务。
+- 有依赖关系的子任务串行执行；没有依赖的可以并行派发。
+- 同一个文件同一时间只给一个子代理写。并行任务不要跑全仓格式化、git 操作或共享构建缓存。
+- 对重要文件，先让子代理改副本，主代理验收后再落到正式位置。
+- 所有子任务完成后，由主代理整合，再统一验收。
+
+## 调用与验收流程
+
+1. 任务文件写在调用方工作区：`work/tasks/<任务名>.txt`；运行记录放 `work/worker-runs`。runner 给每次运行生成独立目录，多个主代理同时调用不会冲突。
+2. 后台运行 runner（Claude 用 Bash `run_in_background`），不要用前台命令等待。
+3. 进程退出后读 `summary.json`。`handoff_ok` 只说明传输层正常（退出码、完成事件、权限拒绝、schema），不代表任务完成。
+4. 主代理亲自验收：打开改动过的文件、看 diff、跑测试，对照任务书逐条检查。不以子代理自称完成代替验收。
+5. 调研类结果要抽查来源链接是否存在（子代理列出的链接曾出现 404）。
+
+任务文件和运行记录（`task.txt`、`request.json`、日志、`summary.json`）都会落盘：不要把密钥、token、密码或个人数据写进任务文件。
+
+## 入口
+
+从调用方工作区根目录运行：
+
+```sh
+R=$SKILL/scripts/run_worker.py
+mkdir -p work/tasks work/worker-runs
+# DeepSeek：默认执行者
+python3 -B $R deepseek --cwd "$PWD" --task-file work/tasks/X.txt --runs-dir work/worker-runs
+# Claude 评审：先准备 work/reviews/X/ 专用目录和脱敏证据
+python3 -B $R claude --cwd work/reviews/X --task-file work/tasks/X.txt --runs-dir work/worker-runs
+python3 -B $R claude ... --tools Read,Glob,Grep              # 只读专用证据目录
+python3 -B $R claude ... --max-budget-usd 1                 # 可选：设 CLI 估算停止阈值
+# Codex 评审：只读
+python3 -B $R codex --cwd work/reviews/X --task-file work/tasks/X.txt --runs-dir work/worker-runs --sandbox read-only
+# Codex 备用执行：只能写 --cwd
+python3 -B $R codex --cwd work/X --task-file work/tasks/X.txt --runs-dir work/worker-runs
+# 通用选项
+python3 -B $R <worker> ... --resume <session_id>            # 续做（Claude 续审需先获授权）
+python3 -B $R <worker> ... --schema work/tasks/X.schema.json # 结构化输出（Codex / Claude）
+python3 -B $R <worker> ... --cli /path/to/cli               # 临时指定 CLI
+```
+
+CLI 路径的查找顺序：`--cli` → 环境变量 `AGENT_ORCH_DEEPSEEK_CLI` / `AGENT_ORCH_CODEX_CLI` / `AGENT_ORCH_CLAUDE_CLI` → `config.json` 的 `cli.<worker>` → 内置默认（macOS 应用包内路径；Claude 取 PATH 上的 `claude`）。实际用的路径和来源记在 `request.json` 的 `cli_path` / `cli_source`。
+
+监督改动真实环境的子代理时，用 `$SKILL/scripts/check_progress.py <任务目录>` 扫它写的 `progress.md` / `changes.md`（退出码 2 = 有 HIGH 报警，1 = 只有 MEDIUM）。受保护路径来自 `config.json` 的 `protected_paths` 和 `--protected-path`。
+
+## 失败处理
+
+所有 worker 都一样：runner 不自动重跑，失败后先查清原因再决定。
+
+- **先看已有结果**：读 `summary.json` 的 `state`、错误和日志，再看工作区 diff。子代理可能已经改完，只是退出阶段失败。
+- **超时或输出被截断**：DeepSeek 单次请求最多输出 32k token（`scripts/dsh-task.patch.yml` 的 `maxTokens`）。把任务拆小后重新派发，不要原样重跑。
+- **只完成一部分**：有 `session_id` 时用 `--resume <id>` 续做，任务文件写明"已完成 X，继续未完成的 Y"。
+- **结果不对**：先检查任务书是否含糊，修改任务书后再派一次。同一任务失败两次，由主代理接手。
+- **鉴权失败、要求付费、模型不可用**：停止并报告，不要自动换模型或供应商。
+
+## DeepSeek：默认执行者
+
+- 配置：provider `deepseek-official`，endpoint `https://api.deepseek.com/anthropic`，模型 `deepseek-flash` / `high`（由 `scripts/dsh-task.patch.yml` 提供）。不要改用第三方 gateway。
+- 入口：官方 DeepSeek Harness Desktop 包内的 CLI（macOS 默认 `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`）。不依赖 PATH 上的其他 `dsh`；别的位置用 `config.json` 指定。
+- 凭据：优先环境变量 `DEEPSEEK_API_KEY`，未设置时只从 `$DSH_HOME/.credentials.yaml`（默认 `~/.dsh/.credentials.yaml`）读取这个键（需要 `ruby`）。运行记录不保存密钥。
+- 超时：默认总时长 600 秒，连续 300 秒无输出判为卡住。需要更长时调大 `--timeout` / `--idle-timeout`，但优先拆小任务。
+- 完成条件：`turn_end.reason.kind=completed`。
+
+## 其他执行方式（按需读）
+
+- 需要多轮、用户能打开查看插话的工作（持续 SSH 排查、陪用户在界面上操作），且主代理在 Claude Desktop：读 `$SKILL/reference/desktop-session.md`。
+- 要找 Claude CLI 做独立评审：读 `$SKILL/reference/claude-review.md`。
+- 要找 Codex 做评审或备用执行：读 `$SKILL/reference/codex.md`。
+
+## 授权与维护
+
+- 授权记录在 `$AGENT_ORCH_HOME/authorizations.md`。读到有效记录就直接调用，不再重复询问；用户新给的授权要写进去。
+- 记录没有覆盖的调用（新模型、新供应商、可能产生明显费用的调用），先说明 Agent、模型、范围和原因，征得同意后再调用。
+- `requested_model` 只能证明请求了什么，不能证明服务端实际用了哪个模型或如何计费。
+- 修改 runner 或本指南后，运行 `python3 -B $SKILL/tests/test_worker.py` 和 `bash $SKILL/tests/check_progress_test/run_tests.sh`（离线，不调用模型）。改动规则本身应提交到 skill 所在的 git 仓库，本机专属内容只写进配置目录。

@@ -1,0 +1,21 @@
+# Default DeepSeek official API patch. maxTokens is per request, not a task budget.
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseURL: https://api.deepseek.com/anthropic
+    thinking: enabled
+    reasoningEffort: high
+    maxTokens: 32768
+    streamIdleTimeoutMs: 120000
+    models:
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash 1017
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+    reasoningEffort: high
+- id: session-title-llm
+  disabled: true
+- id: llm-retry
+  disabled: true

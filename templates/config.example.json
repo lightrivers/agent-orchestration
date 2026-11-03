@@ -1,0 +1,8 @@
+{
+  "cli": {
+    "deepseek": "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+    "codex": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+    "claude": "~/.local/bin/claude"
+  },
+  "protected_paths": []
+}

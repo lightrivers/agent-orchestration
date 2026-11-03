@@ -1,0 +1,13 @@
+{
+  "name": "agent-orchestration",
+  "owner": {
+    "name": "lightrivers"
+  },
+  "plugins": [
+    {
+      "name": "agent-orchestration",
+      "source": "./",
+      "description": "主会话/子会话分工与外部子代理调用规则"
+    }
+  ]
+}
