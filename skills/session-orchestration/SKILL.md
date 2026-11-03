@@ -7,7 +7,9 @@ description: 主会话 / 子会话分工规则：一个主会话和用户沟通�
 
 本文中 `$SKILL` 指本 skill 所在目录。子代理（runner）的细节用 `subagent-dispatch` skill。会话工具（`start_session`、`SendMessage`、`detach_session`、`get_usage` 等）是 Claude Desktop Code 页的工具；在 CLI 里用时，把"子会话"换成另开的终端会话，回报改成写文件。
 
-项目文件约定（`install.sh --project-only <目录>` 会生成空模板）。项目 `CLAUDE.md` 里写了不同的文件名时，以 `CLAUDE.md` 为准，本 skill 和下属文档里的文件名都按它替换：
+项目文件约定（`install.sh --project-only <目录>` 会生成空模板）。
+
+一个工作区里有多个长期项目时，每个项目占一对文件夹 `outputs/<项目>/`、`work/<项目>/`，入口是 `outputs/<项目>/项目说明.md`（写文件对照、本项目的 L3 补充和约定）；工作区 `CLAUDE.md` 只列项目入口，无关会话不读项目目录。这时下表和下属文档里的 `outputs/`、`work/` 都指项目目录，文件名不同的以项目说明为准。单项目工作区直接用下表：
 
 | 文件 | 用途 | 谁改 |
 |---|---|---|
