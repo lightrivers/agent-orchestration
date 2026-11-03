@@ -92,6 +92,7 @@ CLI 路径的查找顺序：`--cli` → 环境变量 `AGENT_ORCH_DEEPSEEK_CLI` /
 Windows 上：
 - 文中的 `python3` 换成 `python` 或 `py -3`，路径分隔符用 `\`；Bash 工具里用 Git Bash 时照原样即可。
 - CLI 要指向真正的 `.exe`。npm 装的 `codex.cmd` 这类 `.cmd` / `.bat` 垫片会被 runner 拒绝，因为 `cmd.exe` 会截断多行任务文本。
+- 例外（仅 Windows）：DeepSeek Harness 在 Windows 上只提供 `<安装目录>\resources\runtime\cli\bin\dsh.cmd`。`cli.deepseek` 直接填它即可，runner 会认出这个布局，绕过 `cmd.exe` 直接启动 `DeepSeek Harness.exe`（`request.json` 里记 `windows_electron_launcher: true`）。macOS 不走这段逻辑，Mac 上不用运行或验证。
 - DeepSeek 密钥最省事的给法是设置用户环境变量 `DEEPSEEK_API_KEY`。
 - 超时后 runner 用 `taskkill /T /F` 结束整个进程树。
 

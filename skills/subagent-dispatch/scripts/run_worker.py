@@ -70,6 +70,32 @@ def resolve_cli(provider, explicit=None, env=os.environ):
     raise ValueError('Unknown CLI provider: ' + str(provider))
 
 
+# ---- Windows only (macOS never calls this; nothing to run or verify on a Mac) ----
+# DeepSeek Harness for Windows ships only resources\runtime\cli\bin\dsh.cmd, which runs
+#   set ELECTRON_RUN_AS_NODE=1
+#   "<root>\DeepSeek Harness.exe" --expose-internals "<root>\resources\app.asar\dsh\...\lib\cli.js" %*
+# cmd.exe would mangle multi-line task text, so the runner launches the Electron binary directly.
+DSH_WIN_CLI_JS = ('dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js')
+
+
+def windows_dsh_launcher(cli_path):
+    """Map Harness's dsh.cmd to [exe, flags, cli.js]; None when the layout is not recognized."""
+    shim = Path(cli_path)
+    if shim.name.lower() != 'dsh.cmd' or len(shim.parents) < 5:
+        return None
+    resources, root = shim.parents[3], shim.parents[4]  # bin -> cli -> runtime -> resources -> root
+    exe = root / 'DeepSeek Harness.exe'
+    asar = resources / 'app.asar'
+    try:
+        text = shim.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    if not (exe.is_file() and asar.is_file() and 'ELECTRON_RUN_AS_NODE' in text and '/'.join(DSH_WIN_CLI_JS[-2:]) in text.replace('\\', '/')):
+        return None
+    return [str(exe), '--expose-internals', str(asar.joinpath(*DSH_WIN_CLI_JS))]
+# ---- end Windows only ----
+
+
 def claude_destination(env):
     """Return the API host; the relay itself changes via CC Switch, so only the URL shape is checked."""
     for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'):
@@ -439,6 +465,12 @@ def main():
         if a.resume:
             cmd += [a.resume]
         cmd += ['--', task]
+    windows_launcher = None
+    if a.provider == 'deepseek' and os.name == 'nt':  # Windows only; see windows_dsh_launcher
+        windows_launcher = windows_dsh_launcher(cmd[0])
+        if windows_launcher:
+            cmd = windows_launcher + cmd[1:]
+            env['ELECTRON_RUN_AS_NODE'] = '1'
     if Path(cmd[0]).suffix.lower() in ('.cmd', '.bat'):
         p.error('Windows batch shims (.cmd/.bat) cannot receive multi-line task text: '
                 'cmd.exe truncates or rewrites it. Pass --cli, set ' + CLI_ENV[a.provider]
@@ -458,6 +490,8 @@ def main():
             'cli_source': cli_source, 'command_without_task': cmd[:-1], 'run_dir': str(run)}
     if a.provider == 'deepseek':
         meta.update(entrypoint=cli_source, credential_source=deepseek_source)
+        if windows_launcher:
+            meta['windows_electron_launcher'] = True
         if a.patch.expanduser().resolve() == DSH_DEFAULT_PATCH.resolve():
             meta.update(config_provider='deepseek-official', config_model='deepseek-flash',
                         config_reasoning_effort='high', config_api_host='api.deepseek.com')

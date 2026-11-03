@@ -78,6 +78,20 @@ class RunnerTests(unittest.TestCase):
    self.assertEqual(m.popen_group_kwargs(),{'creationflags':512})
   with patch.object(m.os,'name','posix'):
    self.assertEqual(m.popen_group_kwargs(),{'start_new_session':True})
+ # Windows only: DeepSeek Harness's dsh.cmd layout. Skipped on macOS; Mac-side sessions need not run it.
+ @unittest.skipUnless(os.name=='nt','Windows-only DeepSeek Harness layout')
+ def test_windows_dsh_cmd_maps_to_electron_launcher(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp)/'Deepseek'; resources=root/'resources'; shim=resources/'runtime'/'cli'/'bin'/'dsh.cmd'
+   shim.parent.mkdir(parents=True); (root/'DeepSeek Harness.exe').write_bytes(b''); (resources/'app.asar').write_bytes(b'')
+   shim.write_text('@echo off\nset "ELECTRON_RUN_AS_NODE=1"\n"%~dp0..\\..\\..\\..\\DeepSeek Harness.exe" --expose-internals '
+     '"%~dp0..\\..\\..\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js" %*\n')
+   self.assertEqual(m.windows_dsh_launcher(shim),[str(root/'DeepSeek Harness.exe'),'--expose-internals',
+     str(resources/'app.asar'/'dsh'/'node_modules'/'@deepseek-ai'/'dsh-desktop-host'/'lib'/'cli.js')])
+   other=Path(tmp)/'codex.cmd'; other.write_text('@echo off\n')
+   self.assertIsNone(m.windows_dsh_launcher(other))
+   (resources/'app.asar').unlink()
+   self.assertIsNone(m.windows_dsh_launcher(shim))
  def test_stop_group_windows_uses_taskkill_and_kills_survivor(self):
   class FakeProc:
    pid=4321
@@ -228,6 +242,8 @@ class RunnerTests(unittest.TestCase):
    self.assertIn(expected,patch_text)
   self.assertNotIn('api.codekey.ai',patch_text)
 
+ # macOS default only; elsewhere resolve_cli searches PATH and could launch a real installed Harness.
+ @unittest.skipUnless(sys.platform=='darwin','desktop-managed default exists only on macOS')
  def test_deepseek_uses_desktop_managed_cli_by_default(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp).resolve(); cli,task=self._fake(root,'import json,sys\nfrom pathlib import Path\nPath("seen-args.json").write_text(json.dumps(sys.argv[1:]))\n')
