@@ -110,7 +110,7 @@ Windows 上：
 
 ## DeepSeek：默认执行者
 
-- 模型跟随 DSH Desktop：runner 每次运行读取 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 里的 `agent-default-model`（即 Desktop 模型选择器当前的渠道和模型），生成一层叠加 patch 放进运行目录（`dsh-desktop-selection.patch.yml`），叠在 `scripts/dsh-task.patch.yml` 之上。用户在 Desktop 里切换，子代理下次运行就跟着换，不用改 skill。实际用的渠道记在 `request.json` 的 `config_source` / `config_provider` / `config_model`，汇报时要说明。
+- 模型跟随 DSH Desktop：runner 每次运行读取 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 里的 `agent-default-model`（即 Desktop 模型选择器当前的渠道和模型），生成一层叠加 patch 放进运行目录（`dsh-desktop-selection.patch.yml`），叠在 `scripts/dsh-task.patch.yml` 之上。DSH Desktop 在任意会话的输入框里切换模型（含 effort），都会同时改写这个全局默认，所以子代理用的是用户最后一次切换的选择；设置 > 模型页只管渠道和密钥，不选模型。子代理下次运行就跟着换，不用改 skill。实际用的渠道记在 `request.json` 的 `config_source` / `config_provider` / `config_model`，汇报时要说明。
 - 只允许 `DSH_ALLOWED_PROVIDERS` 里的渠道（`deepseek-official`、`opencode-go`）；Desktop 选了别的渠道（例如 `deepseek-account`），runner 直接报错、不启动。增加渠道要先取得用户授权，再改这个常量。
 - Desktop 从没选过模型时用 `scripts/dsh-task.patch.yml` 的默认值：provider `deepseek-official`，endpoint `https://api.deepseek.com/anthropic`，模型 `deepseek-flash` / `high`。传 `--patch` 时完全手动，不读 Desktop。
 - 入口：官方 DeepSeek Harness Desktop 包内的 CLI（macOS 默认 `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`）。不依赖 PATH 上的其他 `dsh`；别的位置用 `config.json` 指定。
