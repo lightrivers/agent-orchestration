@@ -19,6 +19,7 @@ class RunnerTests(unittest.TestCase):
   self.config_tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.config_tmp.cleanup)
   self.config_home=Path(self.config_tmp.name)
   self.routing=patch.dict(os.environ,{'AGENT_ORCH_HOME':str(self.config_home),
+   'DSH_HOME':str(self.config_home/'dsh'),
    'AGENT_ORCH_DEEPSEEK_CLI':'','AGENT_ORCH_CODEX_CLI':'','AGENT_ORCH_CLAUDE_CLI':'',
    'ANTHROPIC_BASE_URL':'https://relay.example.com',
    'CLAUDE_CODE_USE_BEDROCK':'0','CLAUDE_CODE_USE_VERTEX':'0','CLAUDE_CODE_USE_FOUNDRY':'0'})
@@ -286,6 +287,53 @@ class RunnerTests(unittest.TestCase):
    with patch.object(m.shutil,'which',return_value=None):
     self.assertIsNone(m.deepseek_credential_source(missing))
    self.assertNotIn('DEEPSEEK_API_KEY',missing)
+
+ DESKTOP_OPENCODE=[{'id':'agent-default-model','config':{'provider':'opencode-go','model':'deepseek-v4.1-flash','reasoningEffort':'high'}},
+  {'id':'llm-pi-ai','config':{'providers':{'opencode-go':{'models':[{'id':'deepseek-v4.1-flash'}],'apiKeyEnv':'OPENCODE_GO_API_KEY','apiKey':'inline-secret'}}}}]
+ def _desktop(self, entries):
+  desktop=self.config_home/'dsh'/'profiles'/'desktop'; desktop.mkdir(parents=True,exist_ok=True)
+  (desktop/'cordis.patch.yml').write_text('# parsed by a mocked reader\n')
+  return patch.object(m,'read_dsh_yaml',return_value=entries)
+ SEEN=('import json,os,sys\nfrom pathlib import Path\nPath("seen-args.json").write_text(json.dumps(sys.argv[1:]))\n'
+  'Path("seen-env.json").write_text(json.dumps({"opencode":bool(os.environ.get("OPENCODE_GO_API_KEY"))}))\n')
+ def test_deepseek_follows_dsh_desktop_selection(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp).resolve(); cli,task=self._fake(root,self.SEEN)
+   with self._desktop(self.DESKTOP_OPENCODE),patch.dict(os.environ,{'OPENCODE_GO_API_KEY':'fixture-only-key'}):
+    self._run(['deepseek','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs'),'--cli',str(cli)])
+   argv=json.loads((root/'seen-args.json').read_text())
+   patches=[argv[i+1] for i,v in enumerate(argv) if v=='--patch']
+   self.assertTrue(patches[0].endswith('dsh-task.patch.yml'))
+   overlay=json.loads(Path(patches[1]).read_text())
+   self.assertEqual(overlay[0]['config'],{'provider':'opencode-go','model':'deepseek-v4.1-flash','reasoningEffort':'high'})
+   self.assertNotIn('inline-secret',json.dumps(overlay))
+   self.assertEqual(json.loads((root/'seen-env.json').read_text()),{'opencode':True})
+   request=json.loads(next((root/'runs').glob('*/request.json')).read_text())
+   self.assertEqual((request['config_source'],request['config_provider'],request['config_model'],request['credential_env']),
+                    ('dsh-desktop','opencode-go','deepseek-v4.1-flash','OPENCODE_GO_API_KEY'))
+   for name in ('request.json','summary.json','dsh-desktop-selection.patch.yml'):
+    self.assertNotIn('fixture-only-key',(next((root/'runs').glob('*/'+name))).read_text())
+ def test_deepseek_rejects_unauthorized_desktop_provider(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp).resolve(); cli,task=self._fake(root,self.SEEN)
+   chosen=[{'id':'agent-default-model','config':{'provider':'deepseek-account','model':'x'}}]
+   with self._desktop(chosen),patch.dict(os.environ,{'DEEPSEEK_API_KEY':'k'}),self.assertRaises(SystemExit),contextlib.redirect_stderr(io.StringIO()):
+    self._run(['deepseek','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs'),'--cli',str(cli)])
+   self.assertFalse((root/'seen-args.json').exists())
+ def test_deepseek_explicit_patch_ignores_desktop(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp).resolve(); cli,task=self._fake(root,self.SEEN)
+   with self._desktop(self.DESKTOP_OPENCODE) as reader,patch.dict(os.environ,{'DEEPSEEK_API_KEY':'k'}):
+    self._run(['deepseek','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs'),'--cli',str(cli),'--patch',str(m.DSH_DEFAULT_PATCH)])
+   reader.assert_not_called()
+   argv=json.loads((root/'seen-args.json').read_text())
+   self.assertEqual(argv.count('--patch'),1)
+ @unittest.skipUnless(m.shutil.which('ruby'),'ruby parses DSH YAML')
+ def test_read_dsh_yaml_handles_js_tags(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   path=Path(tmp)/'cordis.patch.yml'
+   path.write_text("- id: agent-default-model\n  disabled: !!js '!ctx.get(''x'')'\n  config:\n    provider: opencode-go\n")
+   self.assertEqual(m.read_dsh_yaml(path,os.environ)[0]['config'],{'provider':'opencode-go'})
 
  CLAUDE_OK=('import json,os,sys\nfrom pathlib import Path\n'
   'Path("seen-args.json").write_text(json.dumps(sys.argv[1:]))\n'

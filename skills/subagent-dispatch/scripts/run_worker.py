@@ -22,6 +22,8 @@ CLI_ENV = {'deepseek': 'AGENT_ORCH_DEEPSEEK_CLI',
            'claude': 'AGENT_ORCH_CLAUDE_CLI'}
 HERE = Path(__file__).resolve().parent
 DSH_DEFAULT_PATCH = HERE / 'dsh-task.patch.yml'
+# DeepSeek follows the model picked in DSH Desktop, but only through channels the user authorized.
+DSH_ALLOWED_PROVIDERS = ('deepseek-official', 'opencode-go')
 # Total / no-output limits in seconds. The cheap Codex relay is slow, so it gets the longest budget.
 DEFAULT_TIMEOUT = {'codex': 3600, 'deepseek': 600, 'claude': 600}
 DEFAULT_IDLE_TIMEOUT = {'codex': 900, 'deepseek': 300, 'claude': 300}
@@ -117,8 +119,8 @@ def claude_destination(env):
     return endpoint.hostname
 
 
-def read_deepseek_key_from_credentials(credentials_path):
-    """Read refs.DEEPSEEK_API_KEY from the simple credentials YAML without a parser dependency."""
+def read_deepseek_key_from_credentials(credentials_path, key_name='DEEPSEEK_API_KEY'):
+    """Read refs.<key_name> from the simple credentials YAML without a parser dependency."""
     try:
         lines = credentials_path.read_text(encoding='utf-8').splitlines()
     except OSError:
@@ -134,7 +136,7 @@ def read_deepseek_key_from_credentials(credentials_path):
         if not in_refs:
             continue
         name, separator, value = stripped.partition(':')
-        if not separator or name.strip() != 'DEEPSEEK_API_KEY':
+        if not separator or name.strip() != key_name:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
@@ -143,11 +145,61 @@ def read_deepseek_key_from_credentials(credentials_path):
     return None
 
 
-def deepseek_credential_source(env):
-    if env.get('DEEPSEEK_API_KEY'):
+def dsh_home(env):
+    return Path(env.get('DSH_HOME') or str(Path.home() / '.dsh')).expanduser()
+
+
+def read_dsh_yaml(path, env):
+    """Parse a DSH patch file through the system ruby; Python has no YAML in the stdlib."""
+    ruby = shutil.which('ruby', path=env.get('PATH'))
+    if not ruby:
+        raise ValueError('ruby is needed to read ' + str(path) + '; pass --patch to choose the model manually')
+    reader = ("require 'yaml'; require 'json'; "
+              "STDOUT.write(JSON.generate(YAML.safe_load(File.read(ARGV.fetch(0)))))")
+    result = subprocess.run([ruby, '-e', reader, str(path)],
+                            capture_output=True, text=True, check=False, timeout=10)
+    if result.returncode != 0:
+        raise ValueError('Cannot parse ' + str(path) + '; pass --patch to choose the model manually')
+    return json.loads(result.stdout)
+
+
+def dsh_desktop_selection(env):
+    """Return the provider/model DSH Desktop uses now, so subagents follow its model picker.
+
+    None means Desktop never picked one; the official default patch then stays in effect.
+    """
+    path = dsh_home(env) / 'profiles' / 'desktop' / 'cordis.patch.yml'
+    if not path.is_file():
+        return None
+    entries = read_dsh_yaml(path, env)
+    configs = {e.get('id'): e.get('config') or {} for e in entries or [] if isinstance(e, dict)}
+    chosen = configs.get('agent-default-model')
+    if not chosen:
+        return None
+    provider = chosen.get('provider')
+    if provider not in DSH_ALLOWED_PROVIDERS:
+        raise ValueError('DSH Desktop selects provider ' + repr(provider) + ', which is not authorized for '
+                         'subagents (allowed: ' + ', '.join(DSH_ALLOWED_PROVIDERS) + ')')
+    picked = {k: chosen[k] for k in ('provider', 'model', 'reasoningEffort') if k in chosen}
+    selection = {'provider': provider, 'model': chosen.get('model'),
+                 'reasoning_effort': chosen.get('reasoningEffort'), 'key_env': 'DEEPSEEK_API_KEY',
+                 'overlay': [{'id': 'agent-default-model', 'config': picked}]}
+    if provider != 'deepseek-official':
+        block = ((configs.get('llm-pi-ai') or {}).get('providers') or {}).get(provider)
+        if not isinstance(block, dict) or not block.get('apiKeyEnv'):
+            raise ValueError('DSH Desktop has no apiKeyEnv for provider ' + provider)
+        # The overlay is saved with the run, so never copy inline keys or tokens into it.
+        block = {k: v for k, v in block.items()
+                 if k == 'apiKeyEnv' or not any(s in k.lower() for s in ('key', 'token', 'secret', 'header'))}
+        selection['key_env'] = block['apiKeyEnv']
+        selection['overlay'].append({'id': 'llm-pi-ai', 'config': {'providers': {provider: block}}})
+    return selection
+
+
+def dsh_credential_source(env, key_name='DEEPSEEK_API_KEY'):
+    if env.get(key_name):
         return 'launch-environment'
-    dsh_home = Path(env.get('DSH_HOME') or str(Path.home() / '.dsh')).expanduser()
-    credentials_path = dsh_home / '.credentials.yaml'
+    credentials_path = dsh_home(env) / '.credentials.yaml'
     if not credentials_path.is_file():
         return None
     ruby = shutil.which('ruby', path=env.get('PATH'))
@@ -157,23 +209,27 @@ def deepseek_credential_source(env):
             "require 'yaml'; "
             "data = YAML.safe_load(File.read(ARGV.fetch(0))); "
             "refs = data.is_a?(Hash) ? data['refs'] : nil; "
-            "key = refs.is_a?(Hash) ? refs['DEEPSEEK_API_KEY'] : nil; "
+            "key = refs.is_a?(Hash) ? refs[ARGV.fetch(1)] : nil; "
             "STDOUT.write(key) if key.is_a?(String)"
         )
         try:
-            result = subprocess.run([ruby, '-e', reader, str(credentials_path)],
+            result = subprocess.run([ruby, '-e', reader, str(credentials_path), key_name],
                                     capture_output=True, text=True, check=False, timeout=10)
         except (OSError, subprocess.SubprocessError):
             result = None
         key = result.stdout.strip() if result is not None else ''
         if result is not None and result.returncode == 0 and key:
-            env['DEEPSEEK_API_KEY'] = key
+            env[key_name] = key
             return 'dsh-credentials-file'
-    key = read_deepseek_key_from_credentials(credentials_path)
+    key = read_deepseek_key_from_credentials(credentials_path, key_name)
     if not key:
         return None
-    env['DEEPSEEK_API_KEY'] = key
+    env[key_name] = key
     return 'dsh-credentials-file'
+
+
+def deepseek_credential_source(env):
+    return dsh_credential_source(env)
 
 
 def contract_error(summary, message):
@@ -347,7 +403,8 @@ def main():
     p.add_argument('--tools', default='', help='Claude permits only Read,Glob,Grep')
     p.add_argument('--max-turns', type=int, help='Claude default 6 tool turns, not review rounds')
     p.add_argument('--max-budget-usd', type=float, help='Claude only; optional CLI-estimated stop threshold, unset by default')
-    p.add_argument('--patch', type=Path, help='DeepSeek per-task config; default dsh-task.patch.yml')
+    p.add_argument('--patch', type=Path, help='DeepSeek per-task config; default dsh-task.patch.yml '
+                   'plus the model currently picked in DSH Desktop')
     p.add_argument('--sandbox', choices=['read-only', 'workspace-write'], default='workspace-write',
                    help='Codex only; writes limited to --cwd')
     p.add_argument('--ephemeral', action='store_true', help='Codex only: do not persist the session (disables --resume)')
@@ -372,6 +429,7 @@ def main():
         p.error('Timeout and max-turns must be positive')
     if a.max_budget_usd is not None and (not math.isfinite(a.max_budget_usd) or a.max_budget_usd <= 0):
         p.error('--max-budget-usd must be finite and positive')
+    patch_explicit = a.patch is not None
     if a.provider == 'deepseek' and not a.patch:
         a.patch = DSH_DEFAULT_PATCH
     if a.provider != 'codex' and (a.sandbox != 'workspace-write' or a.ephemeral):
@@ -399,11 +457,19 @@ def main():
         p.error('Task must not be empty')
     env = os.environ.copy()
     cli_path, cli_source = resolve_cli(a.provider, a.cli, env)
-    deepseek_source = None
+    deepseek_source = selection = None
+    key_env = 'DEEPSEEK_API_KEY'
     if a.provider == 'deepseek':
-        deepseek_source = deepseek_credential_source(env)
+        if not patch_explicit:  # An explicit --patch keeps full manual control of the model.
+            try:
+                selection = dsh_desktop_selection(env)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                p.error(str(exc))
+        if selection:
+            key_env = selection['key_env']
+        deepseek_source = dsh_credential_source(env, key_env)
         if not deepseek_source:
-            p.error('DeepSeek API key missing; export DEEPSEEK_API_KEY or save it in DeepSeek Harness Settings > Models')
+            p.error('API key missing; export ' + key_env + ' or save it in DeepSeek Harness Settings > Models')
     if a.provider == 'claude':
         # Restricted mode ignores ordinary settings. Preserve only trusted user auth/routing env,
         # never hooks, permissions, plugins or project settings. Existing process env wins.
@@ -485,16 +551,26 @@ def main():
     run = a.runs_dir.expanduser().resolve() / name
     run.mkdir(parents=True, mode=0o700)
     (run / 'task.txt').write_text(task, encoding='utf-8')
+    if selection:
+        overlay = run / 'dsh-desktop-selection.patch.yml'
+        save(overlay, selection['overlay'])  # JSON is valid YAML.
+        at = cmd.index('--json')
+        cmd[at:at] = ['--patch', str(overlay)]
     meta = {'provider': a.provider, 'cwd': str(cwd), 'timeout_seconds': a.timeout,
             'idle_timeout_seconds': a.idle_timeout, 'resume': a.resume, 'cli_path': cli_path,
             'cli_source': cli_source, 'command_without_task': cmd[:-1], 'run_dir': str(run)}
     if a.provider == 'deepseek':
-        meta.update(entrypoint=cli_source, credential_source=deepseek_source)
+        meta.update(entrypoint=cli_source, credential_source=deepseek_source, credential_env=key_env)
         if windows_launcher:
             meta['windows_electron_launcher'] = True
-        if a.patch.expanduser().resolve() == DSH_DEFAULT_PATCH.resolve():
-            meta.update(config_provider='deepseek-official', config_model='deepseek-flash',
-                        config_reasoning_effort='high', config_api_host='api.deepseek.com')
+        if selection:
+            meta.update(config_source='dsh-desktop', config_provider=selection['provider'],
+                        config_model=selection['model'],
+                        config_reasoning_effort=selection['reasoning_effort'])
+        elif a.patch.expanduser().resolve() == DSH_DEFAULT_PATCH.resolve():
+            meta.update(config_source='default-patch', config_provider='deepseek-official',
+                        config_model='deepseek-flash', config_reasoning_effort='high',
+                        config_api_host='api.deepseek.com')
     if a.provider == 'claude':
         meta.update(requested_model=a.model, requested_effort=a.effort,
                     max_budget_usd=a.max_budget_usd, max_turns=a.max_turns,

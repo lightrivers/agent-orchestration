@@ -7,7 +7,7 @@
 
 | 日期 | Agent / 模型 | 范围 | 备注 |
 |---|---|---|---|
-| YYYY-MM-DD | DeepSeek Harness 官方 API `deepseek-official` / `deepseek-flash` / `high` | 默认执行者：适合委派的低、中难度任务和批量重复工作。任务书须具体，主代理独立验收 | 不改用第三方 gateway；其他模型和用途不包含在此授权内 |
+| YYYY-MM-DD | DeepSeek Harness，模型跟随 DSH Desktop 的选择，渠道限 runner 的 `DSH_ALLOWED_PROVIDERS` | 默认执行者：适合委派的低、中难度任务和批量重复工作。任务书须具体，主代理独立验收 | 其他渠道和用途不包含在此授权内；增加渠道需重新授权 |
 | YYYY-MM-DD | Claude Code `claude-opus-5-5` / `medium` | 高级独立评审，按指南门槛判断，无需逐次询问 | 每个用户任务默认一轮；默认无工具，必要时只允许 Read/Glob/Grep 读专用目录的脱敏副本 |
 | YYYY-MM-DD | Codex `gpt-6-astra` / `high` | 跨模型评审（`--sandbox read-only`）；DeepSeek 不适合时的备用执行（`workspace-write`，只写 `--cwd`，不联网） | |
 | YYYY-MM-DD | Claude 内置子代理（Explore / sonnet / haiku） | 搜索、读文件、并行查找 | |

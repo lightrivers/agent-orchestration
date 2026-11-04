@@ -103,16 +103,18 @@ Windows 上：
 所有 worker 都一样：runner 不自动重跑，失败后先查清原因再决定。
 
 - **先看已有结果**：读 `summary.json` 的 `state`、错误和日志，再看工作区 diff。子代理可能已经改完，只是退出阶段失败。
-- **超时或输出被截断**：DeepSeek 单次请求最多输出 32k token（`scripts/dsh-task.patch.yml` 的 `maxTokens`）。把任务拆小后重新派发，不要原样重跑。
+- **超时或输出被截断**：DeepSeek 官方渠道单次请求最多输出 32k token（`scripts/dsh-task.patch.yml` 的 `maxTokens`）。把任务拆小后重新派发，不要原样重跑。
 - **只完成一部分**：有 `session_id` 时用 `--resume <id>` 续做，任务文件写明"已完成 X，继续未完成的 Y"。
 - **结果不对**：先检查任务书是否含糊，修改任务书后再派一次。同一任务失败两次，由主代理接手。
 - **鉴权失败、要求付费、模型不可用**：停止并报告，不要自动换模型或供应商。
 
 ## DeepSeek：默认执行者
 
-- 配置：provider `deepseek-official`，endpoint `https://api.deepseek.com/anthropic`，模型 `deepseek-flash` / `high`（由 `scripts/dsh-task.patch.yml` 提供）。不要改用第三方 gateway。
+- 模型跟随 DSH Desktop：runner 每次运行读取 `$DSH_HOME/profiles/desktop/cordis.patch.yml` 里的 `agent-default-model`（即 Desktop 模型选择器当前的渠道和模型），生成一层叠加 patch 放进运行目录（`dsh-desktop-selection.patch.yml`），叠在 `scripts/dsh-task.patch.yml` 之上。用户在 Desktop 里切换，子代理下次运行就跟着换，不用改 skill。实际用的渠道记在 `request.json` 的 `config_source` / `config_provider` / `config_model`，汇报时要说明。
+- 只允许 `DSH_ALLOWED_PROVIDERS` 里的渠道（`deepseek-official`、`opencode-go`）；Desktop 选了别的渠道（例如 `deepseek-account`），runner 直接报错、不启动。增加渠道要先取得用户授权，再改这个常量。
+- Desktop 从没选过模型时用 `scripts/dsh-task.patch.yml` 的默认值：provider `deepseek-official`，endpoint `https://api.deepseek.com/anthropic`，模型 `deepseek-flash` / `high`。传 `--patch` 时完全手动，不读 Desktop。
 - 入口：官方 DeepSeek Harness Desktop 包内的 CLI（macOS 默认 `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`）。不依赖 PATH 上的其他 `dsh`；别的位置用 `config.json` 指定。
-- 凭据：优先环境变量 `DEEPSEEK_API_KEY`，未设置时只从 `$DSH_HOME/.credentials.yaml`（默认 `~/.dsh/.credentials.yaml`）读取这个键（需要 `ruby`）。运行记录不保存密钥。
+- 凭据：所选渠道的 key 环境变量（官方为 `DEEPSEEK_API_KEY`，其他渠道取 Desktop 配置里的 `apiKeyEnv`，如 `OPENCODE_GO_API_KEY`）。优先用已有的环境变量，未设置时只从 `$DSH_HOME/.credentials.yaml`（默认 `~/.dsh/.credentials.yaml`）读取这一个键。读 Desktop 配置需要 `ruby`。运行记录不保存密钥。
 - 超时：默认总时长 600 秒，连续 300 秒无输出判为卡住。需要更长时调大 `--timeout` / `--idle-timeout`，但优先拆小任务。
 - 完成条件：`turn_end.reason.kind=completed`。
 
