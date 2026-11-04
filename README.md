@@ -41,7 +41,7 @@ This repository is the rulebook that fixed these problems for us during a multi-
 - 🧾 **Evidence over claims.** `handoff_ok` only means the transport worked. The lead must open the diff, run the tests and check the brief line by line.
 - 🔍 **Cross-vendor review with guardrails.** Claude CLI runs with no tools or with read-only tools, in restricted mode, with fast mode off. Codex runs in a read-only sandbox with no network. One review round per task unless you approve more.
 - 🛑 **Mechanical stop points.** Workers that touch real systems log every command and change and stop at fixed checkpoints. They never decide on their own when to ask.
-- 🔁 **Context handover.** When the lead passes about 200k tokens, or you are about to leave for a while, it writes a ≤2 KB handover note, starts its successor, detaches the sub-sessions and archives itself.
+- 🔁 **Context handover.** When the lead's own conversation passes about 250k tokens (fixed system and tool overhead not counted), or you are about to leave for a while, it writes a ≤2 KB handover note, starts its successor, detaches the sub-sessions and archives itself.
 - 🪶 **Lightweight.** Markdown, Python standard library and bash. No Node, no MCP server, no daemon. Installed as symlinks, so `git pull` updates every machine.
 - 🔐 **Nothing personal in git.** CLI paths, authorizations and per-machine model IDs live in `~/.config/agent-orchestration/`.
 
