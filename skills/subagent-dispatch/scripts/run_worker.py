@@ -158,7 +158,16 @@ def read_dsh_yaml(path, env):
     """Parse a DSH patch file through the system ruby; Python has no YAML in the stdlib."""
     ruby = shutil.which('ruby', path=env.get('PATH'))
     if not ruby:
-        raise ValueError('ruby is needed to read ' + str(path) + '; pass --patch to choose the model manually')
+        # Windows usually has no ruby; PyYAML's safe loader also accepts unquoted timestamps.
+        try:
+            import yaml
+        except ImportError:
+            raise ValueError('ruby or PyYAML is needed to read ' + str(path)
+                             + '; pass --patch to choose the model manually')
+        try:
+            return yaml.safe_load(path.read_text(encoding='utf-8'))
+        except (OSError, yaml.YAMLError):
+            raise ValueError('Cannot parse ' + str(path) + '; pass --patch to choose the model manually')
     # Plugins write unquoted timestamps (e.g. usage reset times), so Time/Date must be permitted.
     reader = ("require 'yaml'; require 'json'; require 'date'; "
               "STDOUT.write(JSON.generate(YAML.safe_load(File.read(ARGV.fetch(0)), "
