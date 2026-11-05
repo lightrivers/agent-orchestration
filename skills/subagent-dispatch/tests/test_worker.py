@@ -320,6 +320,30 @@ class RunnerTests(unittest.TestCase):
    with self._desktop(chosen),patch.dict(os.environ,{'DEEPSEEK_API_KEY':'k'}),self.assertRaises(SystemExit),contextlib.redirect_stderr(io.StringIO()):
     self._run(['deepseek','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs'),'--cli',str(cli)])
    self.assertFalse((root/'seen-args.json').exists())
+ DESKTOP_PLUGIN=[{'id':'agent-default-model','config':{'provider':'dsh-opencode-go','model':'deepseek-v4.1-flash','reasoningEffort':'high'}},
+  {'id':'llm-pi-ai','config':{'providers':{}}},
+  {'id':'opencode-go','name':'dsh-opencode-go','config':{'apiKeyEnv':'DSH_OPENCODE_GO_ACCOUNT_X','apiKey':'inline-secret',
+   'accounts':[{'id':'x','name':'OpenCode','apiKeyEnv':'DSH_OPENCODE_GO_ACCOUNT_X'}]}}]
+ def test_deepseek_maps_plugin_provider_to_builtin_route(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp).resolve(); cli,task=self._fake(root,self.SEEN)
+   with self._desktop(self.DESKTOP_PLUGIN),patch.dict(os.environ,{'DSH_OPENCODE_GO_ACCOUNT_X':'fixture-only-key'}):
+    self._run(['deepseek','--cwd',str(root),'--task-file',str(task),'--runs-dir',str(root/'runs'),'--cli',str(cli)])
+   argv=json.loads((root/'seen-args.json').read_text())
+   patches=[argv[i+1] for i,v in enumerate(argv) if v=='--patch']
+   overlay=json.loads(Path(patches[1]).read_text())
+   self.assertEqual(overlay,[{'id':'agent-default-model','config':{'provider':'opencode-go','model':'deepseek-v4.1-flash','reasoningEffort':'high'}},
+    {'id':'llm-pi-ai','config':{'providers':{'opencode-go':{'apiKeyEnv':'DSH_OPENCODE_GO_ACCOUNT_X'}}}}])
+   request=json.loads(next((root/'runs').glob('*/request.json')).read_text())
+   self.assertEqual((request['config_provider'],request['config_desktop_provider'],request['credential_env']),
+                    ('opencode-go','dsh-opencode-go','DSH_OPENCODE_GO_ACCOUNT_X'))
+   for name in ('request.json','summary.json','dsh-desktop-selection.patch.yml'):
+    text=(next((root/'runs').glob('*/'+name))).read_text()
+    self.assertNotIn('fixture-only-key',text); self.assertNotIn('inline-secret',text)
+ def test_plugin_provider_without_key_ref_fails(self):
+  entries=[self.DESKTOP_PLUGIN[0],{'id':'opencode-go','config':{'accounts':[]}}]
+  with self._desktop(entries),self.assertRaises(ValueError):
+   m.dsh_desktop_selection({'DSH_HOME':str(self.config_home/'dsh')})
  def test_deepseek_explicit_patch_ignores_desktop(self):
   with tempfile.TemporaryDirectory() as tmp:
    root=Path(tmp).resolve(); cli,task=self._fake(root,self.SEEN)
@@ -332,8 +356,8 @@ class RunnerTests(unittest.TestCase):
  def test_read_dsh_yaml_handles_js_tags(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/'cordis.patch.yml'
-   path.write_text("- id: agent-default-model\n  disabled: !!js '!ctx.get(''x'')'\n  config:\n    provider: opencode-go\n")
-   self.assertEqual(m.read_dsh_yaml(path,os.environ)[0]['config'],{'provider':'opencode-go'})
+   path.write_text("- id: agent-default-model\n  disabled: !!js '!ctx.get(''x'')'\n  config:\n    provider: opencode-go\n    resetsAt: 2026-11-05T10:44:59.000Z\n")
+   self.assertEqual(m.read_dsh_yaml(path,os.environ)[0]['config']['provider'],'opencode-go')
 
  CLAUDE_OK=('import json,os,sys\nfrom pathlib import Path\n'
   'Path("seen-args.json").write_text(json.dumps(sys.argv[1:]))\n'

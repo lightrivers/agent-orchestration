@@ -24,6 +24,11 @@ HERE = Path(__file__).resolve().parent
 DSH_DEFAULT_PATCH = HERE / 'dsh-task.patch.yml'
 # DeepSeek follows the model picked in DSH Desktop, but only through channels the user authorized.
 DSH_ALLOWED_PROVIDERS = ('deepseek-official', 'opencode-go')
+# Desktop providers that only exist through a Desktop plugin. The headless profile does not load
+# the plugin, so the runner maps them to a built-in route on the same gateway:
+# desktop provider -> (built-in route, plugin config entry id that names the key reference).
+# Only models in DSH's built-in catalog for that route work this way.
+DSH_PLUGIN_PROVIDER_ROUTES = {'dsh-opencode-go': ('opencode-go', 'opencode-go')}
 # Total / no-output limits in seconds. The cheap Codex relay is slow, so it gets the longest budget.
 DEFAULT_TIMEOUT = {'codex': 3600, 'deepseek': 600, 'claude': 600}
 DEFAULT_IDLE_TIMEOUT = {'codex': 900, 'deepseek': 300, 'claude': 300}
@@ -154,8 +159,10 @@ def read_dsh_yaml(path, env):
     ruby = shutil.which('ruby', path=env.get('PATH'))
     if not ruby:
         raise ValueError('ruby is needed to read ' + str(path) + '; pass --patch to choose the model manually')
-    reader = ("require 'yaml'; require 'json'; "
-              "STDOUT.write(JSON.generate(YAML.safe_load(File.read(ARGV.fetch(0)))))")
+    # Plugins write unquoted timestamps (e.g. usage reset times), so Time/Date must be permitted.
+    reader = ("require 'yaml'; require 'json'; require 'date'; "
+              "STDOUT.write(JSON.generate(YAML.safe_load(File.read(ARGV.fetch(0)), "
+              "permitted_classes: [Time, Date], aliases: true)))")
     result = subprocess.run([ruby, '-e', reader, str(path)],
                             capture_output=True, text=True, check=False, timeout=10)
     if result.returncode != 0:
@@ -177,6 +184,8 @@ def dsh_desktop_selection(env):
     if not chosen:
         return None
     provider = chosen.get('provider')
+    if provider in DSH_PLUGIN_PROVIDER_ROUTES:
+        return plugin_route_selection(configs, chosen, provider)
     if provider not in DSH_ALLOWED_PROVIDERS:
         raise ValueError('DSH Desktop selects provider ' + repr(provider) + ', which is not authorized for '
                          'subagents (allowed: ' + ', '.join(DSH_ALLOWED_PROVIDERS) + ')')
@@ -194,6 +203,25 @@ def dsh_desktop_selection(env):
         selection['key_env'] = block['apiKeyEnv']
         selection['overlay'].append({'id': 'llm-pi-ai', 'config': {'providers': {provider: block}}})
     return selection
+
+
+def plugin_route_selection(configs, chosen, desktop_provider):
+    """Map a plugin-only Desktop provider to its built-in route, keeping model, effort and key."""
+    route, plugin_id = DSH_PLUGIN_PROVIDER_ROUTES[desktop_provider]
+    plugin = configs.get(plugin_id) or {}
+    key_env = plugin.get('apiKeyEnv')
+    if not key_env:
+        accounts = [a for a in plugin.get('accounts') or [] if isinstance(a, dict) and a.get('apiKeyEnv')]
+        key_env = accounts[0]['apiKeyEnv'] if accounts else None
+    if not isinstance(key_env, str) or not key_env:
+        raise ValueError('DSH Desktop plugin ' + repr(desktop_provider) + ' names no apiKeyEnv; add an account '
+                         'in its settings or pass --patch to choose the model manually')
+    picked = {'provider': route}
+    picked.update({k: chosen[k] for k in ('model', 'reasoningEffort') if k in chosen})
+    return {'provider': route, 'desktop_provider': desktop_provider, 'model': chosen.get('model'),
+            'reasoning_effort': chosen.get('reasoningEffort'), 'key_env': key_env,
+            'overlay': [{'id': 'agent-default-model', 'config': picked},
+                        {'id': 'llm-pi-ai', 'config': {'providers': {route: {'apiKeyEnv': key_env}}}}]}
 
 
 def dsh_credential_source(env, key_name='DEEPSEEK_API_KEY'):
@@ -567,6 +595,8 @@ def main():
             meta.update(config_source='dsh-desktop', config_provider=selection['provider'],
                         config_model=selection['model'],
                         config_reasoning_effort=selection['reasoning_effort'])
+            if selection.get('desktop_provider'):
+                meta['config_desktop_provider'] = selection['desktop_provider']
         elif a.patch.expanduser().resolve() == DSH_DEFAULT_PATCH.resolve():
             meta.update(config_source='default-patch', config_provider='deepseek-official',
                         config_model='deepseek-flash', config_reasoning_effort='high',
