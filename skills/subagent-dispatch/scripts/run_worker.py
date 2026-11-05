@@ -269,6 +269,134 @@ def deepseek_credential_source(env):
     return dsh_credential_source(env)
 
 
+# ---- Session archive ----
+# Each CLI run leaves a session under a per-cwd folder that desktop apps (DSH Desktop,
+# AgentsAnywhere, ...) scan for their sidebar. After a run the runner moves this run's session
+# into $AGENT_ORCH_HOME/session-archive/<provider>/, keeping a manifest so --resume can move it back.
+SESSION_ID_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.')
+
+
+def config_home(env):
+    return Path(env.get('AGENT_ORCH_HOME') or str(Path.home() / '.config/agent-orchestration')).expanduser()
+
+
+def claude_config_dir(env):
+    return Path(env.get('CLAUDE_CONFIG_DIR') or str(Path.home() / '.claude')).expanduser()
+
+
+def valid_session_id(session_id):
+    return (isinstance(session_id, str) and 0 < len(session_id) <= 200
+            and set(session_id) <= SESSION_ID_CHARS and session_id.strip('.') != '')
+
+
+def session_paths(provider, session_id, env):
+    """Return [(source root, path)] the CLI stored for this session where sidebar apps look."""
+    if not valid_session_id(session_id):
+        return []
+    if provider == 'deepseek':
+        root = dsh_home(env)
+        found = [p for p in (root / 'sessions').glob('*/' + session_id) if p.is_dir()]
+        cache = root / 'storages' / 'session_projcache' / 'sessions' / (session_id + '.json')
+        if cache.is_file():
+            found.append(cache)
+    elif provider == 'claude':
+        root = claude_config_dir(env)
+        found = [p for p in (root / 'projects').glob('*/' + session_id + '.jsonl') if p.is_file()]
+        found += [p for p in (root / 'projects').glob('*/' + session_id) if p.is_dir()]
+    else:
+        return []
+    return [(root, p) for p in found]
+
+
+def manifest_path(provider, session_id, env):
+    return config_home(env) / 'session-archive' / provider / (session_id + '.manifest.json')
+
+
+def archive_session(provider, session_id, env):
+    """Move this session out of the CLI's scanned folders; never raises."""
+    report = {'session_id': session_id, 'moved': [], 'removed_empty_dirs': [], 'errors': []}
+    if provider not in ('deepseek', 'claude'):
+        report['skipped'] = 'not supported for ' + provider
+        return report
+    if not valid_session_id(session_id):
+        report['skipped'] = 'no usable session_id'
+        return report
+    base = config_home(env) / 'session-archive' / provider
+    manifest = manifest_path(provider, session_id, env)
+    try:
+        entries = json.loads(manifest.read_text(encoding='utf-8')).get('entries', []) if manifest.is_file() else []
+    except (OSError, ValueError):
+        entries = []
+    for root, src in session_paths(provider, session_id, env):
+        rel = src.relative_to(root)
+        dest = base / rel
+        try:
+            if dest.exists():
+                raise OSError('archive target already exists: ' + str(dest))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+        except OSError as exc:
+            report['errors'].append(str(exc))
+            continue
+        entries = [e for e in entries if e.get('original') != str(src)]
+        entries.append({'original': str(src), 'archived': str(dest)})
+        report['moved'].append({'from': str(src), 'to': str(dest)})
+        parent = src.parent
+        # Remove the per-cwd folder once it is empty, so the sidebar loses the workspace too.
+        if parent.parent in (root / 'sessions', root / 'projects'):
+            try:
+                parent.rmdir()
+                report['removed_empty_dirs'].append(str(parent))
+            except OSError:
+                pass  # Not empty: other sessions still live there.
+    if entries:
+        try:
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            save(manifest, {'provider': provider, 'session_id': session_id, 'entries': entries})
+            report['manifest'] = str(manifest)
+        except OSError as exc:
+            report['errors'].append(str(exc))
+    return report
+
+
+def restore_session(provider, session_id, env):
+    """Move an archived session back before --resume; never raises."""
+    report = {'session_id': session_id, 'restored': [], 'errors': []}
+    if provider not in ('deepseek', 'claude') or not valid_session_id(session_id):
+        return report
+    manifest = manifest_path(provider, session_id, env)
+    if not manifest.is_file():
+        return report
+    try:
+        entries = json.loads(manifest.read_text(encoding='utf-8')).get('entries', [])
+    except (OSError, ValueError) as exc:
+        report['errors'].append(str(exc))
+        return report
+    left = []
+    for entry in entries:
+        src, dest = Path(entry['archived']), Path(entry['original'])
+        try:
+            if not src.exists():
+                raise OSError('archived copy missing: ' + str(src))
+            if dest.exists():
+                raise OSError('original location is occupied: ' + str(dest))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            report['restored'].append({'from': str(src), 'to': str(dest)})
+        except OSError as exc:
+            report['errors'].append(str(exc))
+            left.append(entry)
+    try:
+        if left:
+            save(manifest, {'provider': provider, 'session_id': session_id, 'entries': left})
+        else:
+            manifest.unlink()
+    except OSError as exc:
+        report['errors'].append(str(exc))
+    return report
+# ---- end session archive ----
+
+
 def contract_error(summary, message):
     summary['handoff_ok'] = False
     summary.setdefault('contract_errors', []).append(message)
@@ -445,6 +573,8 @@ def main():
     p.add_argument('--sandbox', choices=['read-only', 'workspace-write'], default='workspace-write',
                    help='Codex only; writes limited to --cwd')
     p.add_argument('--ephemeral', action='store_true', help='Codex only: do not persist the session (disables --resume)')
+    p.add_argument('--keep-session', action='store_true',
+                   help='DeepSeek/Claude: leave the session where desktop apps list it instead of archiving it')
     a = p.parse_args()
     if a.provider == 'dsh':
         a.provider = 'deepseek'
@@ -620,6 +750,8 @@ def main():
         meta['requested_effort'] = a.effort
         meta['sandbox'] = a.sandbox
         meta['ephemeral'] = a.ephemeral
+    if a.resume and a.provider in ('deepseek', 'claude'):
+        meta['session_restore'] = restore_session(a.provider, a.resume, env)
     save(run / 'request.json', meta)
     start = time.monotonic()
     state = 'finished'
@@ -678,6 +810,14 @@ def main():
     if isinstance(structured, dict) and structured.get('ok') is False:
         contract_error(summary, 'Worker explicitly reported ok=false')
     summary['acceptance_required'] = True
+    if a.provider in ('deepseek', 'claude'):
+        if a.keep_session:
+            summary['session_archive'] = {'skipped': '--keep-session'}
+        else:
+            ids = [i for i in dict.fromkeys([summary.get('session_id'), a.resume]) if i]
+            reports = [archive_session(a.provider, i, env) for i in ids]
+            summary['session_archive'] = reports[0] if len(reports) == 1 else (
+                reports or {'skipped': 'no session_id reported'})
     save(run / 'summary.json', summary)
     (run / 'exit-code.txt').write_text(str(rc) + '\n')
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)

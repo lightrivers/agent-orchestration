@@ -20,6 +20,7 @@ class RunnerTests(unittest.TestCase):
   self.config_home=Path(self.config_tmp.name)
   self.routing=patch.dict(os.environ,{'AGENT_ORCH_HOME':str(self.config_home),
    'DSH_HOME':str(self.config_home/'dsh'),
+   'CLAUDE_CONFIG_DIR':str(self.config_home/'claude'),
    'AGENT_ORCH_DEEPSEEK_CLI':'','AGENT_ORCH_CODEX_CLI':'','AGENT_ORCH_CLAUDE_CLI':'',
    'ANTHROPIC_BASE_URL':'https://relay.example.com',
    'CLAUDE_CODE_USE_BEDROCK':'0','CLAUDE_CODE_USE_VERTEX':'0','CLAUDE_CODE_USE_FOUNDRY':'0'})
@@ -466,5 +467,45 @@ class RunnerTests(unittest.TestCase):
   self.assertEqual(summary['contract_errors'],['wrong model','wrong tools'])
   self.assertEqual(summary['contract_error'],'wrong model; wrong tools')
   self.assertFalse(summary['handoff_ok'])
+
+ def _dsh_session(self,cwd_folder,sid):
+  root=self.config_home/'dsh'
+  d=root/'sessions'/cwd_folder/sid; d.mkdir(parents=True); (d/'session.v4.jsonl.zstd').write_text('x')
+  c=root/'storages'/'session_projcache'/'sessions'; c.mkdir(parents=True,exist_ok=True); (c/(sid+'.json')).write_text('{}')
+  return root
+ def test_archive_deepseek_session_removes_empty_workspace_and_restores(self):
+  root=self._dsh_session('--D-work-reviews-X--','session-abc')
+  r=m.archive_session('deepseek','session-abc',os.environ)
+  self.assertEqual(r['errors'],[]); self.assertEqual(len(r['moved']),2)
+  self.assertFalse((root/'sessions'/'--D-work-reviews-X--').exists())
+  self.assertTrue((root/'sessions').is_dir())
+  self.assertFalse((root/'storages'/'session_projcache'/'sessions'/'session-abc.json').exists())
+  self.assertTrue((root/'storages'/'session_projcache'/'sessions').is_dir())
+  arch=self.config_home/'session-archive'/'deepseek'
+  self.assertTrue((arch/'sessions'/'--D-work-reviews-X--'/'session-abc'/'session.v4.jsonl.zstd').is_file())
+  back=m.restore_session('deepseek','session-abc',os.environ)
+  self.assertEqual(back['errors'],[]); self.assertEqual(len(back['restored']),2)
+  self.assertTrue((root/'sessions'/'--D-work-reviews-X--'/'session-abc'/'session.v4.jsonl.zstd').is_file())
+  self.assertFalse(m.manifest_path('deepseek','session-abc',os.environ).exists())
+  self.assertEqual(m.archive_session('deepseek','session-abc',os.environ)['errors'],[])
+ def test_archive_keeps_workspace_with_other_sessions(self):
+  root=self._dsh_session('--D-proj--','session-a'); self._dsh_session('--D-proj--','session-b')
+  r=m.archive_session('deepseek','session-a',os.environ)
+  self.assertEqual(r['removed_empty_dirs'],[])
+  self.assertTrue((root/'sessions'/'--D-proj--'/'session-b').is_dir())
+ def test_archive_claude_session_file_and_folder(self):
+  proj=self.config_home/'claude'/'projects'/'D--work-reviews-X'; (proj/'c1').mkdir(parents=True)
+  (proj/'c1.jsonl').write_text('{}'); (proj/'c1'/'subagents.jsonl').write_text('{}')
+  r=m.archive_session('claude','c1',os.environ)
+  self.assertEqual(r['errors'],[]); self.assertEqual(len(r['moved']),2)
+  self.assertFalse(proj.exists())
+  m.restore_session('claude','c1',os.environ)
+  self.assertTrue((proj/'c1.jsonl').is_file()); self.assertTrue((proj/'c1'/'subagents.jsonl').is_file())
+ def test_archive_rejects_unsafe_ids_and_codex(self):
+  for bad in ('../x','a/b','a\b','..','',None):
+   self.assertIn('skipped',m.archive_session('deepseek',bad,os.environ))
+   self.assertEqual(m.session_paths('claude',bad,os.environ),[])
+  self.assertIn('skipped',m.archive_session('codex','t1',os.environ))
+  self.assertEqual(m.archive_session('deepseek','session-missing',os.environ)['moved'],[])
 
 if __name__=='__main__': unittest.main(verbosity=2)

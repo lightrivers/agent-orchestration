@@ -85,7 +85,14 @@ python3 -B $R codex --cwd work/X --task-file work/tasks/X.txt --runs-dir work/wo
 python3 -B $R <worker> ... --resume <session_id>            # 续做（Claude 续审需先获授权）
 python3 -B $R <worker> ... --schema work/tasks/X.schema.json # 结构化输出（Codex / Claude）
 python3 -B $R <worker> ... --cli /path/to/cli               # 临时指定 CLI
+python3 -B $R <worker> ... --keep-session                   # 不归档这次的会话记录（DeepSeek / Claude）
 ```
+
+工作目录与会话记录：
+- 每次调用 CLI，它都会按 `--cwd` 在自己的会话目录里记一条会话（DSH：`~/.dsh/sessions/<目录编码>/`；Claude：`~/.claude/projects/<目录编码>/`）。DSH Desktop、AgentsAnywhere 这类软件扫描这些目录，所以每换一个 `--cwd` 侧栏就多一个工作区，每跑一次就多一条会话。
+- `--cwd` 用固定目录：DeepSeek 一律用调用方工作区根目录；评审用 `work/reviews/<X>/`。不要用系统临时目录、`C:\Windows\System32`、家目录这类目录，也不要为了"干净"每次新建一个目录。
+- runner 跑完后自动把这次的会话记录挪进 `$AGENT_ORCH_HOME/session-archive/<worker>/`（DeepSeek、Claude），挪空的工作区目录一并删掉，侧栏就不会再出现它们；结果记在 `summary.json` 的 `session_archive`。`--resume <id>` 时先按清单挪回原处再续做，跑完再归档。要在软件里打开这条会话时加 `--keep-session`。
+- Codex 的会话状态在它自己的 sqlite 里，runner 不动；一次性评审加 `--ephemeral`。
 
 CLI 路径的查找顺序：`--cli` → 环境变量 `AGENT_ORCH_DEEPSEEK_CLI` / `AGENT_ORCH_CODEX_CLI` / `AGENT_ORCH_CLAUDE_CLI` → `config.json` 的 `cli.<worker>` → 内置默认（macOS 用应用包内路径，Claude 取 PATH 上的 `claude`；其他系统一律从 PATH 找）。实际用的路径和来源记在 `request.json` 的 `cli_path` / `cli_source`。
 
