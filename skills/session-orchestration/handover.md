@@ -11,7 +11,7 @@
 正在执行 L2/L3 操作或长任务刚启动时，先到检查点再换。
 
 ## 新主会话
-读 session-orchestration skill 和交接便签；`list_sessions` 核对便签里的子会话；需要时读 `outputs/_索引.md`；向用户报告"已接任，在等的事有……"。
+读 session-orchestration skill 和交接便签；按 SKILL.md"会话命名和分组"改自己的标题、归进项目分组；`list_sessions` 核对便签里的子会话；需要时读 `outputs/_索引.md`；向用户报告"已接任，在等的事有……"。
 
 ## 手动接任（旧主会话不照做时）
 用户在 app 里新开会话说"接任主会话"。新会话：
